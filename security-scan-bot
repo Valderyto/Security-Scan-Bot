@@ -1,0 +1,101 @@
+import os
+import telebot
+import requests
+import logging
+from logging.handlers import RotatingFileHandler
+
+# Чтение токена бота из переменной окружения
+BOT_TOKEN = "Добавь_свой_токен"
+bot = telebot.TeleBot(BOT_TOKEN)
+
+# Настройка логирования с ротацией файлов
+handler = RotatingFileHandler('security_scan.log', maxBytes=2000000, backupCount=5)
+logging.basicConfig(handlers=[handler], level=logging.INFO, format='%(asctime)s - %(message)s')
+
+# Проверка SSL-сертификата
+def check_ssl_certificate(url):
+    if not url.startswith("https"):
+        return "Этот сайт не использует безопасное подключение (HTTPS)"
+    try:
+        response = requests.get(url)
+        if response.url.startswith("https"):
+            return "Этот сайт использует защищённое подключение (SSL)"
+    except Exception as e:
+        logging.error(f"Ошибка проверки SSL для {url}: {e}")
+        return "Произошла ошибка при проверке безопасного подключения"
+    return "Ошибка проверки SSL"
+
+# Проверка наличия важных заголовков безопасности
+def check_security_headers(url):
+    try:
+        response = requests.get(url)
+        headers = response.headers
+        security_checks = {
+            "X-Frame-Options": headers.get("X-Frame-Options", "Отсутствует"),
+            "X-Content-Type-Options": headers.get("X-Content-Type-Options", "Отсутствует"),
+            "Content-Security-Policy": headers.get("Content-Security-Policy", "Отсутствует"),
+            "Strict-Transport-Security": headers.get("Strict-Transport-Security", "Отсутствует")
+        }
+
+        # Формирование результатов на понятном языке
+        results = []
+        if security_checks["X-Frame-Options"] == "Отсутствует":
+            results.append("Этот сайт может быть подвержен атакам с перехватом кликов (clickjacking).")
+        else:
+            results.append("Сайт защищён от некоторых видов атак, связанных с внешними вставками.")
+
+        if security_checks["X-Content-Type-Options"] == "Отсутствует":
+            results.append("Этот сайт не защищён от загрузки файлов с неверным типом.")
+        else:
+            results.append("Сайт защищён от неверных загрузок файлов.")
+
+        if security_checks["Content-Security-Policy"] == "Отсутствует":
+            results.append("На сайте могут быть проблемы с защитой от вредоносного кода.")
+        else:
+            results.append("Сайт имеет базовую защиту от вредоносного кода.")
+
+        if security_checks["Strict-Transport-Security"] == "Отсутствует":
+            results.append("На сайте отсутствует дополнительная защита для безопасного подключения.")
+        else:
+            results.append("Сайт принуждает к использованию защищённого соединения (HTTPS).")
+
+        return "\n".join(results)
+    except Exception as e:
+        logging.error(f"Ошибка при запросе к {url}: {e}")
+        return "Не удалось проверить сайт. Пожалуйста, попробуйте позже."
+
+# Команда /start для запуска проверки
+@bot.message_handler(commands=['start'])
+def handle_scan(message):
+    bot.reply_to(message, "Пожалуйста, введите ссылку на сайт, который нужно проверить:")
+
+    @bot.message_handler(content_types=['text'])
+    def handle_url_input(msg):
+        url = msg.text
+        bot.reply_to(msg, f"Проверяю сайт {url}...")
+
+        # Проверка SSL-сертификата
+        ssl_check = check_ssl_certificate(url)
+        bot.send_message(msg.chat.id, f"Результат проверки защищённого подключения (SSL): {ssl_check}")
+        logging.info(f"Результат проверки SSL для {url}: {ssl_check}")
+
+        # Проверка заголовков безопасности
+        security_headers = check_security_headers(url)
+        if "Не удалось проверить" not in security_headers:
+            bot.send_message(msg.chat.id, f"Результат проверки безопасности сайта:\n{security_headers}")
+            logging.info(f"Результат проверки безопасности для {url}: {security_headers}")
+        else:
+            bot.send_message(msg.chat.id, security_headers)
+            logging.error(f"Ошибка проверки безопасности для {url}")
+
+# Команда /logs для отправки логов
+@bot.message_handler(commands=['logs'])
+def handle_logs(message):
+    if os.path.exists("security_scan.log"):
+        with open("security_scan.log", 'rb') as log_file:
+            bot.send_document(message.chat.id, log_file)
+    else:
+        bot.reply_to(message, "Логи пока не созданы.")
+
+# Запуск бота
+bot.polling()
